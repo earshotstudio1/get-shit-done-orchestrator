@@ -1,7 +1,7 @@
 {
-  "name": "get-shit-done-cc",
-  "version": "1.24.0",
-  "description": "A meta-prompting, context engineering and spec-driven development system for Claude Code, OpenCode, Gemini and Codex by TÂCHES.",
+  "name": "get-shit-done-orchestrator",
+  "version": "1.24.0-orchestrator.1",
+  "description": "Personal Orchestrator fork of get-shit-done-cc v1.24.0 — adds Obsidian idea triage and promotion skills (see ORCHESTRATOR.md). Upstream by TÂCHES.",
   "bin": {
     "get-shit-done-cc": "bin/install.js"
   },

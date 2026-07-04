@@ -281,6 +281,31 @@ List pending todos and select one to work on.
 Usage: `/gsd:check-todos`
 Usage: `/gsd:check-todos api`
 
+### Orchestrator (this fork)
+
+**`/gsd:triage-ideas [vault-path] [--include <path>...]`**
+Triage Obsidian idea captures into a proposed-routing report.
+
+- Reads every note in the vault's `Projects/Ideas/`
+- Classifies project-worthy vs reference vs duplicate vs already-promoted
+- Scores effort (S/M/L/XL), impact, maturity, confidence
+- `--include` folds external project directories into the same report
+- Writes report to `Maintenance/Reports/`; moves nothing without approval
+
+Usage: `/gsd:triage-ideas`
+Usage: `/gsd:triage-ideas --include "C:/path/to/repo"`
+
+**`/gsd:promote-project <idea-note> [--slug <name>] [--code-dir <path>]`**
+Promote an approved idea into an Active vault project.
+
+- Scaffolds `Projects/Active/<slug>/` with README.md + PROGRESS.md
+- Stamps idea note frontmatter (`stage: building`, `promoted`, `promoted_to`)
+- Keeps the idea note in place (links stay stable)
+- Records `code_location` when the code lives outside the vault
+
+Usage: `/gsd:promote-project "Voice Project Co-Pilot"`
+Usage: `/gsd:promote-project off-the-cuff --code-dir "C:/dev/otc"`
+
 ### User Acceptance Testing
 
 **`/gsd:verify-work [phase]`**
