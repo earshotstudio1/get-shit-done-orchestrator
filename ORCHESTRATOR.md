@@ -18,6 +18,7 @@ triggered, per the design note's "do everything manually first" principle.
 | `references/orchestrator-vault.md` | Shared vault conventions (folders, frontmatter schema, safety rules) |
 | `templates/triage-report.md`, `templates/promoted-project.md` | Output templates |
 | Help entries | Both commands documented in `/gsd:help` |
+| `hooks/gsd-context-guard.js` + `commands/gsd/context-status.md` + `references/context-handover.md` | **Context guard** (added 2026-07-08): token-aware limits (150k soft / 250k hard, env-overridable) read from the session transcript; autonomous same-step handover protocol for GSD/orchestrator contexts; `/gsd:context-status` active check. Supersedes upstream `gsd-context-monitor.js` when registered — see `docs/context-guard.md`. Tests: `tests/context-guard.test.cjs` |
 
 Everything else is unmodified upstream. The fork history starts from a clean baseline
 commit of the upstream snapshot, so `git log` shows exactly what diverged.
