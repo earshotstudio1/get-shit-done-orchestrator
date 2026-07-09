@@ -154,6 +154,16 @@ function usageBasis(tokens, remaining) {
   return parts.join('; ') || 'context usage high';
 }
 
+// Confirmed in live use (2026-07-09): tool events fired by SUBAGENTS carry the
+// PARENT session's transcript_path, so a fresh subagent can receive a warning
+// describing its parent's context. Until per-agent transcripts are available in
+// hook input, every message carries a self-disambiguation note so fresh
+// delegates don't refuse work over their parent's usage.
+const SUBAGENT_NOTE =
+  ' [Subagent note: if you have only made a few tool calls so far, this reading is likely the ' +
+  "parent session's transcript, not yours — proceed with your task and reassess only after " +
+  'substantial work of your own.]';
+
 function buildMessage(level, mode, tokens, remaining) {
   const basis = usageBasis(tokens, remaining);
   const softK = Math.round(SOFT_TOKENS / 1000);
@@ -167,7 +177,8 @@ function buildMessage(level, mode, tokens, remaining) {
         '(.continue-here.md / PROGRESS.md / STATE.md) with a "Context handover — still in step: <step>" ' +
         'entry recording exactly where you are, what is done, and the exact next action, then delegate ' +
         'the remainder of this step to a fresh agent per get-shit-done/references/context-handover.md. ' +
-        'Do not continue working in this context.'
+        'Do not continue working in this context.' +
+        SUBAGENT_NOTE
       );
     }
     return (
@@ -177,7 +188,8 @@ function buildMessage(level, mode, tokens, remaining) {
       '(.continue-here.md / PROGRESS.md / STATE.md) with a "Context handover — still in step: <step>" ' +
       'entry recording exactly where you are, what is done, and the exact next action; ' +
       '(2) delegate the REMAINDER of this step to a fresh agent; ' +
-      '(3) do not start new steps in this context.'
+      '(3) do not start new steps in this context.' +
+      SUBAGENT_NOTE
     );
   }
 
@@ -186,13 +198,15 @@ function buildMessage(level, mode, tokens, remaining) {
     return (
       `CONTEXT GUARD — HARD LIMIT: ${basis}. Context is nearly exhausted. ` +
       'STOP starting new work. Inform the user that context is critically low and ask how they ' +
-      'want to proceed. Do not autonomously write handoff files unless the user asks.'
+      'want to proceed. Do not autonomously write handoff files unless the user asks.' +
+      SUBAGENT_NOTE
     );
   }
   return (
     `CONTEXT GUARD — SOFT LIMIT: ${basis} (soft ${softK}k). Context is getting large. ` +
     'Avoid starting new complex work and wrap up the current task at a natural stopping point. ' +
-    'Inform the user so they can pause or hand off deliberately.'
+    'Inform the user so they can pause or hand off deliberately.' +
+    SUBAGENT_NOTE
   );
 }
 
