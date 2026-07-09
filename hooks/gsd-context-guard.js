@@ -18,6 +18,13 @@
 //   Whichever source crosses first wins (OR logic) - on 200k-window models the
 //   percentage triggers fire long before 250k tokens is reachable.
 //
+// Model-aware limits: the default 150k/250k pair suits ~200k-250k-window models
+// (Opus, GPT 5.5). Large-context models get higher limits automatically, resolved
+// per hook invocation from the model id on the last main-chain assistant entry
+// (see resolveLimitsForModel). Precedence: GSD_CTX_MODEL_LIMITS env (per-model
+// JSON override) > built-in large-window table (fable|mythos) > GSD_CTX_SOFT/
+// HARD_TOKENS env globals > hardcoded 150000/250000.
+//
 // GSD_CONTEXT_GUARD_MODE: "handover" | "advisory". Default: auto - handover when
 // the working directory contains .planning/, advisory otherwise.
 //
@@ -40,13 +47,62 @@ function intEnv(name, dflt) {
 const SOFT_TOKENS = intEnv('GSD_CTX_SOFT_TOKENS', 150000);
 const HARD_TOKENS = intEnv('GSD_CTX_HARD_TOKENS', 250000);
 
+// --- model-aware limit resolution -------------------------------------------
+
+// Built-in large-context-window model table. Add new large-window models here
+// once they're stable; use GSD_CTX_MODEL_LIMITS for anything sooner (e.g. "add
+// GPT 5.6 the day it ships with one env entry").
+const BUILTIN_MODEL_LIMITS = [{ pattern: /fable|mythos/i, soft: 600000, hard: 850000 }];
+
+function parseModelLimitsEnv() {
+  const raw = process.env.GSD_CTX_MODEL_LIMITS;
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    return obj;
+  } catch (e) {
+    return null; // malformed JSON -> ignore silently, never break the hook
+  }
+}
+
+// Resolve {soft, hard} token limits for a given model id string (or null).
+// Precedence (highest first):
+//   1. GSD_CTX_MODEL_LIMITS env - case-insensitive substring match against model id
+//   2. Built-in large-window table (fable|mythos)
+//   3. GSD_CTX_SOFT_TOKENS / GSD_CTX_HARD_TOKENS env globals (SOFT_TOKENS/HARD_TOKENS)
+//   4. Hardcoded 150000 / 250000 (already baked into SOFT_TOKENS/HARD_TOKENS defaults)
+function resolveLimits(model) {
+  if (model) {
+    const envLimits = parseModelLimitsEnv();
+    if (envLimits) {
+      const modelLower = model.toLowerCase();
+      for (const key of Object.keys(envLimits)) {
+        if (modelLower.includes(key.toLowerCase())) {
+          const v = envLimits[key];
+          if (v && Number.isFinite(v.soft) && Number.isFinite(v.hard)) {
+            return { soft: v.soft, hard: v.hard };
+          }
+        }
+      }
+    }
+    for (const entry of BUILTIN_MODEL_LIMITS) {
+      if (entry.pattern.test(model)) {
+        return { soft: entry.soft, hard: entry.hard };
+      }
+    }
+  }
+  return { soft: SOFT_TOKENS, hard: HARD_TOKENS };
+}
+
 // --- token counting -------------------------------------------------------
 
-// Read the last main-chain assistant entry's usage from a Claude Code JSONL
-// transcript. Context size = input + cache_read + cache_creation (+ output of
-// that turn). Scans backwards with progressively larger tail windows so huge
-// transcripts (and huge trailing tool-result lines) stay cheap.
-function lastAssistantUsageTokens(file) {
+// Read the last main-chain assistant entry's usage (and model id) from a
+// Claude Code JSONL transcript. Context size = input + cache_read +
+// cache_creation (+ output of that turn). Scans backwards with progressively
+// larger tail windows so huge transcripts (and huge trailing tool-result
+// lines) stay cheap. Returns { tokens, model } or null.
+function lastAssistantUsageEntry(file) {
   let fd = null;
   let size = 0;
   try {
@@ -89,7 +145,8 @@ function lastAssistantUsageTokens(file) {
           (u.cache_read_input_tokens || 0) +
           (u.cache_creation_input_tokens || 0);
         if (inputSide <= 0) continue;
-        return inputSide + (u.output_tokens || 0);
+        const model = typeof obj.message.model === 'string' ? obj.message.model : null;
+        return { tokens: inputSide + (u.output_tokens || 0), model };
       }
       if (start === 0) break;
     }
@@ -123,13 +180,14 @@ function readBridgeRemaining(sessionId) {
 
 // --- level + mode + message -------------------------------------------------
 
-function decideLevel(tokens, remaining) {
+function decideLevel(tokens, remaining, limits) {
+  const l = limits || { soft: SOFT_TOKENS, hard: HARD_TOKENS };
   const hard =
-    (tokens != null && tokens >= HARD_TOKENS) ||
+    (tokens != null && tokens >= l.hard) ||
     (remaining != null && remaining <= HARD_REMAINING_PCT);
   if (hard) return 'hard';
   const soft =
-    (tokens != null && tokens >= SOFT_TOKENS) ||
+    (tokens != null && tokens >= l.soft) ||
     (remaining != null && remaining <= SOFT_REMAINING_PCT);
   if (soft) return 'soft';
   return null;
@@ -164,10 +222,11 @@ const SUBAGENT_NOTE =
   "parent session's transcript, not yours — proceed with your task and reassess only after " +
   'substantial work of your own.]';
 
-function buildMessage(level, mode, tokens, remaining) {
+function buildMessage(level, mode, tokens, remaining, limits) {
+  const l = limits || { soft: SOFT_TOKENS, hard: HARD_TOKENS };
   const basis = usageBasis(tokens, remaining);
-  const softK = Math.round(SOFT_TOKENS / 1000);
-  const hardK = Math.round(HARD_TOKENS / 1000);
+  const softK = Math.round(l.soft / 1000);
+  const hardK = Math.round(l.hard / 1000);
 
   if (mode === 'handover') {
     if (level === 'hard') {
@@ -196,7 +255,7 @@ function buildMessage(level, mode, tokens, remaining) {
   // Advisory mode (upstream-compatible wording; never commandeers non-GSD sessions).
   if (level === 'hard') {
     return (
-      `CONTEXT GUARD — HARD LIMIT: ${basis}. Context is nearly exhausted. ` +
+      `CONTEXT GUARD — HARD LIMIT: ${basis} (hard limit ${hardK}k). Context is nearly exhausted. ` +
       'STOP starting new work. Inform the user that context is critically low and ask how they ' +
       'want to proceed. Do not autonomously write handoff files unless the user asks.' +
       SUBAGENT_NOTE
@@ -283,19 +342,26 @@ function runStatus(args) {
   const sessionId = get('--session');
 
   let tokens = null;
+  let model = null;
   let source = 'none';
   if (transcript) {
-    tokens = lastAssistantUsageTokens(transcript);
-    if (tokens != null) source = 'transcript';
+    const entry = lastAssistantUsageEntry(transcript);
+    if (entry != null) {
+      tokens = entry.tokens;
+      model = entry.model;
+      source = 'transcript';
+    }
   }
   const remaining = readBridgeRemaining(sessionId);
   if (tokens == null && remaining != null) source = 'bridge';
+
+  const limits = resolveLimits(model);
 
   let level;
   if (tokens == null && remaining == null) {
     level = 'unknown';
   } else {
-    level = decideLevel(tokens, remaining) || 'ok';
+    level = decideLevel(tokens, remaining, limits) || 'ok';
   }
 
   process.stdout.write(
@@ -303,8 +369,9 @@ function runStatus(args) {
       {
         transcript: transcript || null,
         context_tokens: tokens,
-        soft_limit_tokens: SOFT_TOKENS,
-        hard_limit_tokens: HARD_TOKENS,
+        model,
+        soft_limit_tokens: limits.soft,
+        hard_limit_tokens: limits.hard,
         bridge_remaining_pct: remaining,
         level,
         mode: resolveMode(cwd),
@@ -334,17 +401,23 @@ function runHook() {
       const cwd = data.cwd || process.cwd();
 
       let tokens = null;
+      let model = null;
       if (data.transcript_path) {
-        tokens = lastAssistantUsageTokens(data.transcript_path);
+        const entry = lastAssistantUsageEntry(data.transcript_path);
+        if (entry != null) {
+          tokens = entry.tokens;
+          model = entry.model;
+        }
       }
       const remaining = readBridgeRemaining(sessionId);
+      const limits = resolveLimits(model);
 
-      const level = decideLevel(tokens, remaining);
+      const level = decideLevel(tokens, remaining, limits);
       if (!level) process.exit(0);
       if (!shouldFire(sessionId || 'unknown-session', level)) process.exit(0);
 
       const mode = resolveMode(cwd);
-      const message = buildMessage(level, mode, tokens, remaining);
+      const message = buildMessage(level, mode, tokens, remaining, limits);
 
       const output = {
         hookSpecificOutput: {

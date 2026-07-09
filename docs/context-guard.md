@@ -23,9 +23,34 @@ the upstream [context monitor](context-monitor.md) with three additions:
 | Tokens (transcript) | `GSD_CTX_SOFT_TOKENS` (default **150000**) | `GSD_CTX_HARD_TOKENS` (default **250000**) |
 | Remaining % (bridge) | <= 35% | <= 25% |
 
-Whichever source crosses first wins (OR). On 200k-window models the percentage triggers
-fire long before 250k tokens is reachable; on 1M-window models the token triggers do the
-work. Soft = wrap up + hand over; hard = stop now + hand over.
+Whichever source crosses first wins (OR). Bridge percentages are already
+window-relative (a "remaining %" means the same fraction of headroom regardless of the
+model's context size), so they need no model-awareness and are left untouched. The
+token thresholds, by contrast, are absolute and only fit ~200k-250k-window models
+(Opus, GPT 5.5) by default — large-context models need higher absolute limits, resolved
+per hook invocation from the model id on the last main-chain assistant transcript entry.
+
+### Model-aware overrides
+
+| Precedence (highest first) | Source | Notes |
+|---|---|---|
+| 1 | `GSD_CTX_MODEL_LIMITS` env | JSON object; each key is a case-insensitive substring matched against the model id; value `{"soft": N, "hard": N}`. First matching key wins. Malformed JSON is ignored silently (never breaks the hook). Beats the built-in table even for models the table already covers. |
+| 2 | Built-in large-window table | Model id matching `/fable\|mythos/i` → soft **600000**, hard **850000**. |
+| 3 | `GSD_CTX_SOFT_TOKENS` / `GSD_CTX_HARD_TOKENS` env | Existing global defaults (see table above). |
+| 4 | Hardcoded defaults | **150000** / **250000**. |
+
+No model available on the transcript (bridge-only signal, or no transcript at all) →
+falls straight to the global defaults (tier 3/4).
+
+Add a new large-context model the day it ships, with one env entry — no code change
+needed:
+
+```bash
+export GSD_CTX_MODEL_LIMITS='{"gpt-5.6": {"soft": 600000, "hard": 850000}}'
+```
+
+Warning messages always show the *resolved* limits (soft/hard actually applied for that
+model), not the global defaults.
 
 ## Behavior
 
@@ -53,9 +78,11 @@ work. Soft = wrap up + hand over; hard = stop now + hand over.
 node hooks/gsd-context-guard.js --status [--transcript <path>] [--dir <project-dir>] [--session <id>]
 ```
 
-Prints JSON: `context_tokens`, `soft_limit_tokens`, `hard_limit_tokens`,
-`bridge_remaining_pct`, `level` (`ok|soft|hard|unknown`), `mode`, `source`
-(`transcript|bridge|none`). Without `--transcript` it uses the newest `*.jsonl` under
+Prints JSON: `context_tokens`, `model` (string from the transcript's last main-chain
+assistant entry, or `null`), `soft_limit_tokens`, `hard_limit_tokens` (the *resolved*
+limits actually applied — see model-aware overrides above), `bridge_remaining_pct`,
+`level` (`ok|soft|hard|unknown`), `mode`, `source` (`transcript|bridge|none`). Without
+`--transcript` it uses the newest `*.jsonl` under
 `~/.claude/projects/<munged-project-dir>/` — a heuristic: with parallel subagents the
 newest file may be another agent's transcript. `unknown` means no data; don't guess.
 
@@ -98,9 +125,11 @@ bridge file as a fallback/extra signal.
 
 ## Tests
 
-`tests/context-guard.test.cjs` — 20 cases covering token math, thresholds, env
+`tests/context-guard.test.cjs` — 26 cases covering token math, thresholds, env
 overrides, debounce/escalation, sidechain skipping, tail-reading with oversized lines,
-bridge fallback/staleness, malformed input, and the CLI contract. Run:
+bridge fallback/staleness, malformed input, the CLI contract, and model-aware limit
+resolution (built-in large-window table, `GSD_CTX_MODEL_LIMITS` override precedence,
+resolved-limit interpolation in warning text, and `--status` model reporting). Run:
 
 ```bash
 node tests/context-guard.test.cjs

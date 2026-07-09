@@ -29,19 +29,21 @@ function tdir(name) {
   return d;
 }
 
-function usageEntry(input, cacheRead, cacheCreate, output, extra = {}) {
+function usageEntry(input, cacheRead, cacheCreate, output, extra = {}, model = null) {
+  const message = {
+    role: 'assistant',
+    usage: {
+      input_tokens: input,
+      cache_read_input_tokens: cacheRead,
+      cache_creation_input_tokens: cacheCreate,
+      output_tokens: output,
+    },
+  };
+  if (model) message.model = model;
   return Object.assign(
     {
       type: 'assistant',
-      message: {
-        role: 'assistant',
-        usage: {
-          input_tokens: input,
-          cache_read_input_tokens: cacheRead,
-          cache_creation_input_tokens: cacheCreate,
-          output_tokens: output,
-        },
-      },
+      message,
     },
     extra
   );
@@ -305,6 +307,70 @@ test('CLI --status with missing transcript still exits 0 with source none', () =
   const st = JSON.parse(r.stdout);
   assert.strictEqual(st.source, 'none');
   assert.strictEqual(st.level, 'unknown');
+});
+
+// --- model-aware threshold exemptions ---------------------------------------
+
+test('fable model at ~200k stays silent (large-window built-in limits apply)', () => {
+  const dir = tdir('fable-silent');
+  // 50000 + 140000 + 5000 + 1000 = 196000 — under built-in fable soft (600k)
+  const t = writeTranscript(dir, [usageEntry(50000, 140000, 5000, 1000, {}, 'claude-fable-5')]);
+  const r = runHook(hookInput(sid(), t, dir));
+  assert.strictEqual(r.code, 0);
+  assert.strictEqual(r.stdout, '', 'fable at 196k should be silent under 600k soft limit');
+});
+
+test('fable model at ~700k fires SOFT with the 600k soft limit shown', () => {
+  const dir = tdir('fable-soft');
+  // 100000 + 590000 + 5000 + 1000 = 696000 — over built-in fable soft (600k), under hard (850k)
+  const t = writeTranscript(dir, [usageEntry(100000, 590000, 5000, 1000, {}, 'claude-fable-5')]);
+  const r = runHook(hookInput(sid(), t, dir));
+  const msg = parseWarning(r.stdout);
+  assert.ok(/SOFT LIMIT/.test(msg), `expected SOFT LIMIT in: ${msg}`);
+  assert.ok(/600k/.test(msg), `expected resolved 600k soft limit shown in: ${msg}`);
+});
+
+test('fable model at ~900k fires HARD', () => {
+  const dir = tdir('fable-hard');
+  // 100000 + 790000 + 5000 + 1000 = 896000 — over built-in fable hard (850k)
+  const t = writeTranscript(dir, [usageEntry(100000, 790000, 5000, 1000, {}, 'claude-fable-5')]);
+  const r = runHook(hookInput(sid(), t, dir));
+  const msg = parseWarning(r.stdout);
+  assert.ok(/HARD LIMIT/.test(msg), `expected HARD LIMIT in: ${msg}`);
+  assert.ok(/850k/.test(msg), `expected resolved 850k hard limit shown in: ${msg}`);
+});
+
+test('opus model at ~160k fires SOFT (default limits unchanged)', () => {
+  const dir = tdir('opus-soft');
+  const t = writeTranscript(dir, [usageEntry(40000, 115000, 5000, 500, {}, 'claude-opus-4-5')]); // 160.5k
+  const r = runHook(hookInput(sid(), t, dir));
+  const msg = parseWarning(r.stdout);
+  assert.ok(/SOFT LIMIT/.test(msg), `expected SOFT LIMIT in: ${msg}`);
+  assert.ok(/150k/.test(msg), `expected default 150k soft limit shown in: ${msg}`);
+});
+
+test('GSD_CTX_MODEL_LIMITS env override beats built-in fable table', () => {
+  const dir = tdir('model-limits-env');
+  // 160.5k usage; override sets fable soft=100000 (well below default fable 600k), hard=900000
+  const t = writeTranscript(dir, [usageEntry(40000, 115000, 5000, 500, {}, 'claude-fable-5')]);
+  const r = runHook(hookInput(sid(), t, dir), {
+    env: { GSD_CTX_MODEL_LIMITS: JSON.stringify({ fable: { soft: 100000, hard: 900000 } }) },
+  });
+  const msg = parseWarning(r.stdout);
+  assert.ok(/SOFT LIMIT/.test(msg), `expected SOFT LIMIT via env override in: ${msg}`);
+  assert.ok(/100k/.test(msg), `expected overridden 100k soft limit shown in: ${msg}`);
+});
+
+test('CLI --status reports model and resolved limits for a fable transcript', () => {
+  const dir = tdir('cli-status-model');
+  const t = writeTranscript(dir, [usageEntry(100000, 590000, 5000, 1000, {}, 'claude-fable-5')]); // 696k
+  const r = runCli(['--status', '--transcript', t]);
+  assert.strictEqual(r.code, 0);
+  const st = JSON.parse(r.stdout);
+  assert.strictEqual(st.model, 'claude-fable-5');
+  assert.strictEqual(st.soft_limit_tokens, 600000);
+  assert.strictEqual(st.hard_limit_tokens, 850000);
+  assert.strictEqual(st.level, 'soft');
 });
 
 // ---------------------------------------------------------------------------
