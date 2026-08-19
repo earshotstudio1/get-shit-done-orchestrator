@@ -99,7 +99,7 @@ both = duplicate warnings once the bridge thresholds trip):
         "hooks": [
           {
             "type": "command",
-            "command": "node \"C:/Users/user/.claude/hooks/gsd-context-guard.js\""
+            "command": "node \"C:/Users/<you>/.claude/hooks/gsd-context-guard.js\""
           }
         ]
       }

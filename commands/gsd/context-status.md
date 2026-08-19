@@ -38,7 +38,7 @@ default 250000).
 
 ```bash
 node "$HOME/.claude/hooks/gsd-context-guard.js" --status --dir "$(pwd)" 2>/dev/null \
-  || node "C:/Users/user/OneDrive/Desktop/projects/GSD-orchestrator/get-shit-done-orchestrator/hooks/gsd-context-guard.js" --status --dir "$(pwd)"
+  || node "<path-to-this-repo>/hooks/gsd-context-guard.js" --status --dir "$(pwd)"
 ```
 
 Pass through `--transcript` / `--dir` arguments if the user supplied them.

@@ -15,7 +15,7 @@ Config file shape:
 
 ```json
 {
-  "vault": "C:/Users/user/vault",
+  "vault": "C:/path/to/your/vault",
   "projects_root": "Projects",
   "reports_dir": "Maintenance/Reports"
 }
