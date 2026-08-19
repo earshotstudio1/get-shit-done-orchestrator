@@ -2,7 +2,7 @@
 
 # GET SHIT DONE
 
-[English](README.md) · **简体中文**
+[English](UPSTREAM-README.md) · **简体中文**
 
 **一个轻量但强大的元提示、上下文工程与规格驱动开发系统，适用于 Claude Code、OpenCode、Gemini CLI 和 Codex。**
 
