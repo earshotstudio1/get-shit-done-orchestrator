@@ -111,6 +111,16 @@
  *     --stopped-at "..."
  *     [--resume-file path]
  *
+ * Autonomy (orchestrator fork — unattended runs):
+ *   autonomy mode [--mode M]           Resolve active mode + run limits
+ *   autonomy resolve <gate> [--mode M] How a decision gate resolves in this mode
+ *   autonomy gates                     Resolve every gate at once
+ *   autonomy status                    Read .planning/.autonomous-status.json
+ *   autonomy set-status <s>            Write the controller sentinel
+ *     [--reason "..."] [--phase N] [--milestone vX.Y]
+ *   autonomy log-decision --gate G     Append to DECISIONS-DEFERRED.md
+ *     --action A [--phase N] [--note "..."]
+ *
  * Compound Commands (workflow-specific initialization):
  *   init execute-phase <phase>         All context for execute-phase workflow
  *   init plan-phase <phase>            All context for plan-phase workflow
@@ -139,6 +149,7 @@ const milestone = require('./lib/milestone.cjs');
 const commands = require('./lib/commands.cjs');
 const init = require('./lib/init.cjs');
 const frontmatter = require('./lib/frontmatter.cjs');
+const autonomy = require('./lib/autonomy.cjs');
 
 // ─── CLI Router ───────────────────────────────────────────────────────────────
 
@@ -562,6 +573,48 @@ async function main() {
           break;
         default:
           error(`Unknown init workflow: ${workflow}\nAvailable: execute-phase, plan-phase, new-project, new-milestone, quick, resume, verify-work, phase-op, todos, milestone-op, map-codebase, progress`);
+      }
+      break;
+    }
+
+    case 'autonomy': {
+      const subcommand = args[1];
+      const flag = name => {
+        const i = args.indexOf(name);
+        return i !== -1 ? args[i + 1] : null;
+      };
+      const modeOverride = flag('--mode');
+
+      switch (subcommand) {
+        case 'mode':
+          autonomy.cmdAutonomyMode(cwd, modeOverride, raw);
+          break;
+        case 'resolve':
+          autonomy.cmdAutonomyResolve(cwd, args[2], modeOverride, raw);
+          break;
+        case 'gates':
+          autonomy.cmdAutonomyGates(cwd, raw);
+          break;
+        case 'status':
+          autonomy.cmdAutonomyStatus(cwd, raw);
+          break;
+        case 'set-status':
+          autonomy.cmdAutonomySetStatus(cwd, args[2], {
+            reason: flag('--reason'),
+            phase: flag('--phase'),
+            milestone: flag('--milestone'),
+          }, raw);
+          break;
+        case 'log-decision':
+          autonomy.cmdAutonomyLogDecision(cwd, {
+            gate: flag('--gate'),
+            action: flag('--action'),
+            phase: flag('--phase'),
+            note: flag('--note'),
+          }, raw);
+          break;
+        default:
+          error(`Unknown autonomy subcommand: ${subcommand}\nAvailable: mode, resolve, gates, status, set-status, log-decision`);
       }
       break;
     }

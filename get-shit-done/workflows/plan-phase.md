@@ -162,7 +162,20 @@ If `context_path` is not null, display: `Using phase context from: ${context_pat
 
 **If `context_path` is null (no CONTEXT.md exists):**
 
-Use AskUserQuestion:
+Resolve the autonomy gate first — an unattended run has nobody to answer this:
+
+```bash
+GATE=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy resolve plan.missing_context)
+```
+
+**If `action` is `stop`** (batched/unattended): planning without context means inferring the user's design preferences and building on the guess. Write the sentinel and exit the workflow:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status blocked \
+  --reason "no CONTEXT.md for phase {X} — run /gsd:discuss-phase {X}" --phase {X}
+```
+
+**If `action` is `ask`** (supervised, the default): use AskUserQuestion:
 - header: "No context"
 - question: "No CONTEXT.md found for Phase {X}. Plans will use research and requirements only — your design preferences won't be included. Continue or capture context first?"
 - options:
@@ -296,7 +309,21 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 
 **If UI-SPEC.md missing AND `UI_GATE_CFG` is `true`:**
 
-Use AskUserQuestion:
+Resolve the autonomy gate:
+
+```bash
+GATE=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy resolve plan.ui_spec_missing)
+```
+
+**If `action` is `defer`** (batched/unattended): continue to step 6 without a UI-SPEC, and log it:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy log-decision \
+  --gate plan.ui_spec_missing --action defer --phase {N} \
+  --note "planned without a UI design contract"
+```
+
+**If `action` is `ask`** (supervised, the default): use AskUserQuestion:
 - header: "UI Design Contract"
 - question: "Phase {N} has frontend indicators but no UI-SPEC.md. Generate a design contract before planning?"
 - options:

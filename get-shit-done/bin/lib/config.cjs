@@ -17,6 +17,8 @@ const VALID_CONFIG_KEYS = new Set([
   'workflow.research', 'workflow.plan_check', 'workflow.verifier',
   'workflow.nyquist_validation', 'workflow.ui_phase', 'workflow.ui_safety_gate',
   'workflow._auto_chain_active',
+  'autonomy.mode', 'autonomy.gap_retries', 'autonomy.stop_at_milestone_boundary',
+  'autonomy.max_cycles',
   'git.branching_strategy', 'git.phase_branch_template', 'git.milestone_branch_template',
   'planning.commit_docs', 'planning.search_gitignored',
 ]);
@@ -97,6 +99,14 @@ function ensureConfigFile(cwd) {
       verifier: true,
       nyquist_validation: true,
     },
+    autonomy: {
+      // supervised keeps interactive sessions behaving exactly as upstream;
+      // gsd-run.js opts a run into batched/unattended explicitly.
+      mode: 'supervised',
+      gap_retries: 1,
+      stop_at_milestone_boundary: true,
+      max_cycles: 10,
+    },
     parallelization: true,
     brave_search: hasBraveSearch,
   };
@@ -104,6 +114,7 @@ function ensureConfigFile(cwd) {
     ...hardcoded,
     ...userDefaults,
     workflow: { ...hardcoded.workflow, ...(userDefaults.workflow || {}) },
+    autonomy: { ...hardcoded.autonomy, ...(userDefaults.autonomy || {}) },
   };
 
   try {

@@ -12,24 +12,27 @@ This fork adds the stages before that, and one safeguard for long sessions.
 
 **Context guard.** A token-aware hook that reads actual usage from the session transcript and enforces soft and hard thresholds (150k and 250k by default, overridable by environment variable). Past the limit it triggers a handover protocol that writes state out and hands off within the same step, rather than degrading quietly as the window fills. `/gsd:context-status` gives an active check. This supersedes upstream's context monitor when registered.
 
-Both were built manual-first on purpose: triggered on demand, not on a cron, until the behaviour has proved itself.
+**Autonomous runs.** `get-shit-done/bin/gsd-run.js` drives a milestone to completion across multiple headless `claude -p` sessions, each with a fresh context window, recovering exactly where the last left off — including consuming a context-guard handover. Upstream's `/gsd:autonomous` is autonomous within one session but pauses at ~15 decision points; autonomy modes resolve each of those to a documented default instead, so nothing stalls waiting for a human who isn't there. `batched` (the default) front-loads every user-facing decision into a single review before the run, then doesn't stop. Full policy in [docs/autonomous-runs.md](docs/autonomous-runs.md).
+
+Both triage commands were built manual-first on purpose: triggered on demand, not on a cron, until the behaviour has proved itself.
 
 ## Why it exists
 
 I had a vault full of captured ideas and a build system that only started once an idea had already become a project. The gap between those two was me, doing it inconsistently. The triage layer closes it.
 
-The context guard came out of a different problem: long autonomous runs failing near the end of a session in ways that were hard to recover from.
+The context guard came out of a different problem: long autonomous runs failing near the end of a session in ways that were hard to recover from. The run controller is the other half of that fix — the guard writes a clean handover, and something has to pick it up.
 
 ## Architecture
 
 - **Additive, not invasive** — the fork history starts from a clean baseline commit of the upstream snapshot, so `git log` shows precisely what diverged and rebasing on a new upstream release stays tractable.
 - **New commands follow upstream's own structure** — a `commands/gsd/*.md` entry paired with a `workflows/*.md` implementation, so they are indistinguishable from native commands at the call site and appear in `/gsd:help`.
 - **Vault conventions are centralised** in `get-shit-done/references/orchestrator-vault.md` — folder layout, frontmatter schema and safety rules in one place rather than duplicated across both workflows.
+- **Autonomy policy lives in one module** (`get-shit-done/bin/lib/autonomy.cjs`) — workflows resolve each decision gate through the CLI rather than restating the policy in prose, so the controller loop and the workflow can never disagree about what happens when nobody is watching. Every gate defaults to `ask`, so an interactive session behaves exactly as upstream.
 - **The context guard is a hook, not a wrapper** (`hooks/gsd-context-guard.js`) — it reads the transcript rather than instrumenting the agent, so it fails safe if the format shifts. Covered by `tests/context-guard.test.cjs`.
 
 ## Status
 
-Seven commits on top of upstream. Used in anger for real triage runs. The remaining orchestrator design (research agent, deep review, TDD gate, daily digest) is deliberately unbuilt while the manual version proves out.
+Eight commits on top of upstream. Used in anger for real triage runs. The remaining orchestrator design (research agent, deep review, TDD gate, daily digest) is deliberately unbuilt while the manual version proves out.
 
 Open question I have not settled: keep this as the installed GSD and rebase on upstream releases, or extract the orchestrator pieces into a standalone skill pack that coexists with stock GSD. The second is cleaner long-term.
 

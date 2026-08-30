@@ -1,12 +1,17 @@
 <purpose>
 
-Drive all remaining milestone phases autonomously. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. Pauses only for explicit user decisions (grey area acceptance, blockers, validation requests). Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
+Drive all remaining milestone phases autonomously. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
+
+In `supervised` mode (the default) this pauses for explicit user decisions — grey area acceptance, blockers, validation requests. In `batched` or `unattended` mode every one of those pauses resolves to a documented default instead, so the workflow can run inside a headless `claude -p` cycle with nobody to answer. See `get-shit-done/references/autonomy.md`.
 
 </purpose>
 
 <required_reading>
 
 Read all files referenced by the invoking prompt's execution_context before starting.
+
+Also read `~/.claude/get-shit-done/references/autonomy.md` — it defines how each decision
+gate below resolves in the active mode.
 
 </required_reading>
 
@@ -33,6 +38,29 @@ INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" init milestone-op)
 
 Parse JSON for: `milestone_version`, `milestone_name`, `phase_count`, `completed_phases`, `roadmap_exists`, `state_exists`, `commit_docs`.
 
+Resolve the autonomy mode — this governs every decision gate in this workflow:
+
+```bash
+AUTONOMY=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy mode)
+```
+
+Parse `mode` from the JSON. Parse `--mode M`, `--unattended` or `--supervised` from `$ARGUMENTS` if present — an explicit flag wins over the resolved value, and must be passed on every subsequent `autonomy resolve` call as `--mode ${MODE}`.
+
+**Resolving a gate.** Wherever a step below says *resolve gate `<id>`*, run:
+
+```bash
+GATE=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy resolve <id> --mode ${MODE})
+```
+
+Parse `action`. If `asks_user` is true, use AskUserQuestion exactly as written. Otherwise take the `action` without prompting and log it:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy log-decision \
+  --gate <id> --action <action> --phase ${PHASE_NUM} --note "<what you did and why it mattered>"
+```
+
+Never call AskUserQuestion when `asks_user` is false — in a headless cycle there is nobody to answer and the run will stall until it times out.
+
 **If `roadmap_exists` is false:** Error — "No ROADMAP.md found. Run `/gsd:new-milestone` first."
 **If `state_exists` is false:** Error — "No STATE.md found. Run `/gsd:new-milestone` first."
 
@@ -45,9 +73,17 @@ Display startup banner:
 
  Milestone: {milestone_version} — {milestone_name}
  Phases: {phase_count} total, {completed_phases} complete
+ Mode: {mode}
 ```
 
 If `FROM_PHASE` is set, display: `Starting from phase ${FROM_PHASE}`
+
+Mark the run in progress so a controller loop knows a cycle started:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status continue \
+  --reason "autonomous cycle started" --milestone ${milestone_version}
+```
 
 </step>
 
@@ -79,6 +115,11 @@ Parse the JSON `phases` array.
  All phases complete! Nothing left to do.
 ```
 
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status complete \
+  --reason "no incomplete phases remain" --milestone ${milestone_version}
+```
+
 Exit cleanly.
 
 **Display phase plan:**
@@ -101,6 +142,79 @@ DETAIL=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" roadmap get-phase 
 ```
 
 Extract `phase_name`, `goal`, `success_criteria` from each. Store for use in execute_phase and transition messages.
+
+</step>
+
+<step name="prefront_review">
+
+## 2b. Up-Front Grey Area Review (batched mode only)
+
+**Skip this step entirely unless `MODE` is `batched`.** In `supervised` mode each phase is discussed as it comes up; in `unattended` mode nothing is reviewed.
+
+Batched mode exists to solve one problem: a supervised run interrupts you ~4 times per phase, and an unattended run never asks at all. Here you answer once, before any code is written, and the run proceeds without stopping.
+
+**Check for an existing review:**
+
+```bash
+cat .planning/AUTONOMY-PREFERENCES.md 2>/dev/null
+```
+
+If the file exists and lists every phase in the current run, display `Using existing up-front review: .planning/AUTONOMY-PREFERENCES.md` and proceed to execute_phase.
+
+**Otherwise, build the review.** For each incomplete phase, in order:
+
+1. Run the infrastructure detection from smart_discuss Sub-step 3. Infrastructure phases need no review — note them as auto and move on.
+2. For the remaining (user-facing) phases, generate grey areas and recommendations exactly as smart_discuss Sub-step 3 describes, using prior CONTEXT.md decisions and a codebase scout for grounding.
+
+Display the whole run's decisions as one table, grouped by phase:
+
+```
+## Up-Front Review — {N} phases, {M} decisions
+
+### Phase {N}: {Name}
+| # | Question | ✅ Recommended | Alternative(s) |
+|---|----------|---------------|-----------------|
+| 1 | {question} | {answer} — {rationale} | {alt1}; {alt2} |
+```
+
+Infrastructure phases are listed as a single line: `Phase {N}: {Name} — infrastructure, no decisions needed.`
+
+Then ask via **AskUserQuestion** (this is the one intentional pause of a batched run):
+- **question:** "Accept these {M} decisions for the whole run?"
+- **options:** "Accept all" / "Change a phase" / "Discuss phase by phase instead"
+
+**On "Accept all":** proceed to write the file.
+
+**On "Change a phase":** ask which phase, then present that phase's areas using smart_discuss Sub-step 4's per-area flow. Re-display the full table and re-ask.
+
+**On "Discuss phase by phase instead":** set `MODE` to `supervised` for the remainder of this run, display `Falling back to supervised mode — each phase will be discussed as it comes up.`, and proceed to execute_phase.
+
+**Write the answers** to `.planning/AUTONOMY-PREFERENCES.md`:
+
+```markdown
+# Autonomy Preferences
+
+**Reviewed:** {date}
+**Milestone:** {milestone_version} — {milestone_name}
+**Phases covered:** {list}
+
+## Phase {N}: {Name}
+### {Area Name}
+- {decision}
+```
+
+Commit it:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(autonomy): up-front review for ${milestone_version}" --files ".planning/AUTONOMY-PREFERENCES.md"
+```
+
+Display:
+
+```
+Up-front review complete — {M} decisions across {N} phases.
+The run will not stop again unless it hits a blocker.
+```
 
 </step>
 
@@ -193,7 +307,11 @@ Proceed to iterate step.
 
 Read the human_verification section from VERIFICATION.md to get the count and items requiring manual testing.
 
-Display the items, then ask user via AskUserQuestion:
+Resolve gate `verify.human_needed`.
+
+**If `action` is `defer`** (batched/unattended): display `Phase ${PHASE_NUM} ⏭ Human validation deferred — {count} item(s)`, log the decision with the item list in `--note`, and proceed to iterate step. Do not prompt.
+
+**If `action` is `ask`** (supervised): display the items, then ask user via AskUserQuestion:
 - **question:** "Phase ${PHASE_NUM} has items needing manual verification. Validate now or continue to next phase?"
 - **options:** "Validate now" / "Continue without validation"
 
@@ -215,7 +333,11 @@ Read gap summary from VERIFICATION.md (score and missing items). Display:
 Score: {N}/{M} must-haves verified
 ```
 
-Ask user via AskUserQuestion:
+Resolve gate `verify.gaps_found`.
+
+**If `action` is `retry_once`** (batched/unattended): run the gap closure cycle below without prompting. If it resolves to `passed` or `human_needed`, route normally. If gaps persist, log the decision (`--action defer`, `--note` naming the unmet must-haves) and proceed to iterate step — do not prompt, and do not attempt a second closure.
+
+**If `action` is `ask`** (supervised): ask user via AskUserQuestion:
 - **question:** "Gaps found in phase ${PHASE_NUM}. How to proceed?"
 - **options:** "Run gap closure" / "Continue without fixing" / "Stop autonomous mode"
 
@@ -399,7 +521,19 @@ Generate **3-4 grey areas** with **~4 questions each**. For each question:
 
 ### Sub-step 4: Present Proposals Per Area
 
-Present grey areas **one at a time**. For each area (M of N):
+Resolve gate `discuss.grey_area` once, before presenting anything.
+
+**If `action` is `accept`** (batched/unattended): do not present anything and do not prompt. Take the recommended answer for every question, except where `.planning/AUTONOMY-PREFERENCES.md` records an answer for this phase and area — those win. Log once per area:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy log-decision \
+  --gate discuss.grey_area --action accept --phase ${PHASE_NUM} \
+  --note "{area name}: {the answers taken, and whether from the up-front review or the recommendation}"
+```
+
+Display `Phase ${PHASE_NUM}: {N} grey area(s) resolved from {up-front review|recommendations}.` and go to Sub-step 5.
+
+**If `action` is `ask`** (supervised): present grey areas **one at a time**. For each area (M of N):
 
 Display a table:
 
@@ -617,7 +751,19 @@ Read the gaps summary from the audit file. Display:
 ⚠ Audit: Gaps Found
 ```
 
-Ask user via AskUserQuestion:
+Resolve gate `audit.gaps_found`.
+
+**If `action` is `stop`** (batched/unattended): a milestone is never marked complete with known gaps while nobody is watching. Log the decision, then:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status blocked \
+  --reason "milestone audit found gaps — review .planning/v${milestone_version}-MILESTONE-AUDIT.md" \
+  --milestone ${milestone_version}
+```
+
+Display the gap summary and exit cleanly. All completed phases stand; the next run resumes from here.
+
+**If `action` is `ask`** (supervised): ask user via AskUserQuestion:
 - **question:** "Milestone audit found gaps. How to proceed?"
 - **options:** "Continue anyway — accept gaps" / "Stop — fix gaps manually"
 
@@ -632,7 +778,11 @@ Read the tech debt summary from the audit file. Display:
 ⚠ Audit: Tech Debt Identified
 ```
 
-Show the summary, then ask user via AskUserQuestion:
+Resolve gate `audit.tech_debt`.
+
+**If `action` is `stop`** (batched/unattended): log the decision, write `blocked` with reason `"milestone audit identified tech debt — review .planning/v${milestone_version}-MILESTONE-AUDIT.md"` via `autonomy set-status`, display the summary and exit cleanly.
+
+**If `action` is `ask`** (supervised): show the summary, then ask user via AskUserQuestion:
 - **question:** "Milestone audit found tech debt. How to proceed?"
 - **options:** "Continue with tech debt" / "Stop — address debt first"
 
@@ -660,7 +810,11 @@ If the archive file does not exist, go to handle_blocker: "Complete milestone di
 Skill(skill="gsd:cleanup")
 ```
 
-Cleanup shows its own dry-run and asks user for approval internally — this is an acceptable pause per CTRL-01 since it's an explicit decision about file deletion.
+Resolve gate `milestone.cleanup`.
+
+**If `action` is `dry_run`** (batched/unattended): run cleanup in dry-run mode only and do not confirm any deletion — nothing is deleted while nobody is watching. Log the decision with the proposed deletions in `--note`, and display `Cleanup ⏭ dry-run only — run /gsd:cleanup yourself to apply.`
+
+**If `action` is `ask`** (supervised): invoke cleanup as above. Cleanup shows its own dry-run and asks user for approval internally — this is an acceptable pause per CTRL-01 since it's an explicit decision about file deletion.
 
 **5d. Final Completion**
 
@@ -678,13 +832,31 @@ Display final completion banner:
  Ship it! 🚀
 ```
 
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status complete \
+  --reason "milestone lifecycle finished" --milestone ${milestone_version}
+```
+
+If `MODE` is not `supervised`, also display the count of rows in `.planning/DECISIONS-DEFERRED.md` and remind the user to review it before shipping.
+
 </step>
 
 <step name="handle_blocker">
 
 ## 6. Handle Blocker
 
-When any phase operation fails or a blocker is detected, present 3 options via AskUserQuestion:
+When any phase operation fails or a blocker is detected, resolve gate `blocker`.
+
+**If `action` is `stop`** (batched/unattended): a blocker is by definition something this run could not resolve, so stop cleanly rather than looping on it. Log the decision, then:
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status blocked \
+  --reason "{the blocker description}" --phase ${PHASE_NUM} --milestone ${milestone_version}
+```
+
+Display the STOPPED summary below and exit cleanly. Do not retry, do not skip the phase — a controller loop reads the sentinel and stops, and the reason is what the user reads first.
+
+**If `action` is `ask`** (supervised): present 3 options via AskUserQuestion:
 
 **Prompt:** "Phase {N} ({Name}) encountered an issue: {description}"
 
@@ -709,6 +881,11 @@ When any phase operation fails or a blocker is detected, present 3 options via A
  Remaining: {list of remaining phases}
 
  Resume with: /gsd:autonomous --from {next_phase}
+```
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy set-status blocked \
+  --reason "stopped at phase ${PHASE_NUM}: {description}" --phase ${PHASE_NUM}
 ```
 
 </step>
@@ -740,4 +917,14 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 - [ ] Final completion banner displayed after lifecycle
 - [ ] Progress bar uses phase number / total milestone phases (not position among incomplete)
 - [ ] Smart discuss documents relationship to discuss-phase with CTRL-03 note
+- [ ] Autonomy mode resolved at init; `--mode`/`--unattended`/`--supervised` flags honoured
+- [ ] Every decision gate resolved via `autonomy resolve` before prompting
+- [ ] AskUserQuestion never called when the gate reports `asks_user: false`
+- [ ] Batched mode runs the up-front review once and writes AUTONOMY-PREFERENCES.md
+- [ ] Batched mode's "discuss phase by phase" option falls back to supervised cleanly
+- [ ] Every gate resolved without the user is logged to DECISIONS-DEFERRED.md
+- [ ] Status sentinel written on every exit path: complete, blocked, and cycle start
+- [ ] Audit gaps/tech debt stop rather than auto-completing a milestone unattended
+- [ ] Cleanup never deletes unattended — dry-run only
+- [ ] Supervised mode behaviour is unchanged from upstream
 </success_criteria>
