@@ -64,6 +64,15 @@ process.exit(0);
   return { stubPath, counterPath };
 }
 
+/** Same stub, but it also writes to stdout — used to prove where cycle output lands. */
+function createChattyStub(tmpDir, statuses) {
+  const { stubPath, counterPath } = createStubClaude(tmpDir, statuses);
+  const script = fs.readFileSync(stubPath, 'utf-8')
+    .replace('process.exit(0);', "process.stdout.write('CYCLE CHATTER\\n');\nprocess.exit(0);");
+  fs.writeFileSync(stubPath, script, { mode: 0o755 });
+  return { stubPath, counterPath };
+}
+
 function runController(tmpDir, args) {
   const result = spawnSync(process.execPath, [RUN_PATH, '--dir', tmpDir, ...args], {
     encoding: 'utf-8',
@@ -274,5 +283,59 @@ describe('gsd-run cycle cap', () => {
       'utf-8'
     );
     assert.strictEqual(gsdRun.readConfiguredCap(tmpDir), 10);
+  });
+});
+
+// ─── quiet mode and headless marker ───────────────────────────────────────────
+
+describe('gsd-run quiet mode', SKIP_STUB, () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createRunnableProject(); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  test('--quiet sends cycle output to the log instead of the terminal', () => {
+    // The stub prints to stdout; with --quiet that must not reach the controller's.
+    const { stubPath } = createChattyStub(tmpDir, ['complete']);
+
+    const result = runController(tmpDir, ['--claude-bin', stubPath, '--quiet']);
+
+    assert.strictEqual(result.code, 0);
+    assert.ok(!result.stdout.includes('CYCLE CHATTER'), 'cycle output must not flood the caller');
+    const log = fs.readFileSync(path.join(tmpDir, '.planning', 'autonomous-run.log'), 'utf-8');
+    assert.match(log, /CYCLE CHATTER/);
+    assert.match(log, /Cycle 1/);
+  });
+
+  test('without --quiet the cycle output still reaches the terminal', () => {
+    const { stubPath } = createChattyStub(tmpDir, ['complete']);
+
+    const result = runController(tmpDir, ['--claude-bin', stubPath]);
+    assert.match(result.stdout, /CYCLE CHATTER/);
+  });
+
+  test('appends across cycles rather than truncating', () => {
+    const { stubPath } = createStubClaude(tmpDir, ['continue', 'complete']);
+    runController(tmpDir, ['--claude-bin', stubPath, '--quiet']);
+
+    const log = fs.readFileSync(path.join(tmpDir, '.planning', 'autonomous-run.log'), 'utf-8');
+    assert.match(log, /Cycle 1/);
+    assert.match(log, /Cycle 2/);
+  });
+
+  test('marks spawned cycles headless so interactive reviews are skipped', () => {
+    const stubPath = path.join(tmpDir, 'stub-env');
+    const outPath = path.join(tmpDir, 'env-out');
+    fs.writeFileSync(
+      stubPath,
+      `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(outPath)}, String(process.env.GSD_AUTONOMY_HEADLESS));
+require('fs').writeFileSync(${JSON.stringify(path.join(tmpDir, '.planning', '.autonomous-status.json'))},
+  JSON.stringify({ status: 'complete', updated_at: new Date().toISOString() }));
+`,
+      { mode: 0o755 }
+    );
+
+    runController(tmpDir, ['--claude-bin', stubPath]);
+    assert.strictEqual(fs.readFileSync(outPath, 'utf-8'), '1');
   });
 });

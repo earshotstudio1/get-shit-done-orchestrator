@@ -46,6 +46,7 @@ function parseArgs(argv) {
     model: null,
     permissionMode: 'acceptEdits',
     dryRun: false,
+    quiet: false,
     claudeBin: 'claude',
     help: false,
   };
@@ -68,6 +69,7 @@ function parseArgs(argv) {
       case '--permission-mode': opts.permissionMode = next(); break;
       case '--claude-bin': opts.claudeBin = next(); break;
       case '--dry-run': opts.dryRun = true; break;
+      case '--quiet': opts.quiet = true; break;
       case '--help': case '-h': opts.help = true; break;
       default: fail(`Unknown argument: ${arg}`);
     }
@@ -100,6 +102,8 @@ Options:
   --model NAME          Model passed through to claude
   --permission-mode M   Passed to claude (default: acceptEdits)
   --dry-run             Print what each cycle would invoke, run nothing
+  --quiet               Send cycle output to .planning/autonomous-run.log instead
+                        of the terminal (used when launched from /gsd:marathon)
   --claude-bin PATH     Claude executable (default: claude)
   -h, --help            This message
 
@@ -183,15 +187,32 @@ function logCycle(dir, cycle, prompt, exitCode, status) {
 
 // ─── Cycle execution ──────────────────────────────────────────────────────────
 
-function runCycle(opts, prompt) {
+function runCycle(opts, prompt, cycle) {
   const args = ['-p', prompt, '--permission-mode', opts.permissionMode];
   if (opts.model) args.push('--model', opts.model);
 
+  // When launched from inside a Claude session, streaming every cycle's full
+  // transcript back would flood that session's context. Log to disk instead.
+  let stdio = 'inherit';
+  let logFd = null;
+  if (opts.quiet) {
+    const logPath = path.join(opts.dir, '.planning', 'autonomous-run.log');
+    logFd = fs.openSync(logPath, 'a');
+    fs.writeSync(logFd, `\n═══ Cycle ${cycle} — ${new Date().toISOString()} ═══\n`);
+    stdio = ['ignore', logFd, logFd];
+  }
+
   const result = spawnSync(opts.claudeBin, args, {
     cwd: opts.dir,
-    stdio: 'inherit',
-    env: { ...process.env, GSD_AUTONOMY_MODE: opts.mode },
+    stdio,
+    env: {
+      ...process.env,
+      GSD_AUTONOMY_MODE: opts.mode,
+      [autonomy.HEADLESS_ENV]: '1',
+    },
   });
+
+  if (logFd !== null) fs.closeSync(logFd);
 
   if (result.error) {
     if (result.error.code === 'ENOENT') {
@@ -249,7 +270,7 @@ function main() {
       continue;
     }
 
-    const exitCode = runCycle(opts, prompt);
+    const exitCode = runCycle(opts, prompt, cycle);
     const status = autonomy.readStatus(opts.dir);
     logCycle(opts.dir, cycle, prompt, exitCode, status);
 

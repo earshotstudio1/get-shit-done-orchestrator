@@ -18,27 +18,47 @@ the milestone lifecycle. Two things stopped it being genuinely hands-off:
 
 ## Quick start
 
-Set the project up interactively — this part stays human, and it's the part that decides
-whether the rest is worth anything:
+Three commands, all inside Claude Code:
 
-```bash
-cd ~/projects/my-app
-claude
-  /gsd:new-project
-  /gsd:new-milestone
+```
+/gsd:new-project     — define what you're building   (once per project)
+/gsd:new-milestone   — define this milestone's phases (once per milestone)
+/gsd:marathon        — run it to completion            (as often as you like)
 ```
 
-Then hand it over:
+The first two stay interactive on purpose: they decide whether everything after them is
+worth anything. `/gsd:marathon` is the hands-off one.
+
+It surveys the remaining phases, reviews every user-facing decision with you once, asks
+you to confirm, then hands off to a controller loop that spawns a fresh `claude -p`
+session per cycle until the milestone is done. Continuity comes from `.planning/` on
+disk, which is where GSD keeps it anyway — a fresh window per cycle is better than one
+long conversation, because quality stops degrading as the window fills.
+
+The confirmation offers a dry run if you want to see what it would do first.
+
+### Which autonomous command is which
+
+| Command | Scope |
+|---------|-------|
+| `/gsd:autonomous` | Runs phases **inside this session**. Stops when the context window fills. Upstream's. |
+| `/gsd:marathon` | Runs the milestone **across as many sessions as it takes**. This fork's. |
+
+If you want hands-off, you want `marathon`.
+
+### Driving it from a terminal instead
+
+`/gsd:marathon` is a thin wrapper over the controller, which you can also run directly —
+useful for a cron job or a script:
 
 ```bash
-node ~/.claude/get-shit-done/bin/gsd-run.js --max-cycles 12
+node ~/.claude/get-shit-done/bin/gsd-run.js --max-cycles 12 --dry-run
 ```
 
-Each cycle spawns a fresh `claude -p` with a clean context window. Continuity comes from
-`.planning/` on disk, which is where GSD keeps it anyway — a fresh window per cycle is
-better than one long conversation, because quality stops degrading as the window fills.
-
-Add `--dry-run` first to see exactly what it would invoke.
+One caveat: run this way, there is no up-front review, because there is no session to
+hold it in. Cycles fall back to the recommended answer for every grey area (and say so in
+the log). Run `/gsd:marathon` once to produce `AUTONOMY-PREFERENCES.md` and the controller
+will use it on every later run.
 
 ## Modes
 
@@ -48,17 +68,18 @@ Add `--dry-run` first to see exactly what it would invoke.
 | `batched` | **Default for runs.** One up-front review of every user-facing decision, then no stopping. |
 | `unattended` | Nothing asks. Every gate takes its default and is logged. |
 
-```bash
-node ~/.claude/get-shit-done/bin/gsd-run.js --mode unattended --max-cycles 20
+```
+/gsd:marathon --mode unattended --cycles 20
 ```
 
 Or persist it: `node gsd-tools.cjs config-set autonomy.mode batched`.
 
 ### What batched actually does
 
-Before any code is written, it walks every incomplete phase, skips the infrastructure
-ones (the workflow already detects those), and presents every remaining grey area as one
-table with a recommendation per question. You accept or change them once. The answers go
+Before any code is written — and in the session you're sitting in, not a headless one —
+it walks every incomplete phase, skips the infrastructure ones (the workflow already
+detects those), and presents every remaining grey area as one table with a recommendation
+per question. You accept or change them once. The answers go
 to `.planning/AUTONOMY-PREFERENCES.md` and the run proceeds without stopping again.
 
 One fifteen-minute sitting instead of thirty interruptions, without handing the design
@@ -95,6 +116,7 @@ can't burn your whole cap.
   action, note. **Read this before shipping.** It's as much a deliverable of the run as
   the code.
 - `.planning/AUTONOMOUS-LOG.md` — one row per cycle.
+- `.planning/autonomous-run.log` — full transcript of every cycle.
 - `.planning/AUTONOMY-PREFERENCES.md` — what you accepted in the up-front review.
 
 ## Running it safely

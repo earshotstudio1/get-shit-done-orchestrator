@@ -24,6 +24,11 @@ const { output, error } = require('./core.cjs');
 const VALID_MODES = ['supervised', 'batched', 'unattended'];
 const VALID_STATUSES = ['continue', 'complete', 'blocked'];
 
+// Set by gsd-run.js on every spawned cycle. A headless cycle has no user to
+// answer AskUserQuestion, so any step that would run an interactive review must
+// check this rather than assuming the mode implies a person is present.
+const HEADLESS_ENV = 'GSD_AUTONOMY_HEADLESS';
+
 const STATUS_FILE = path.join('.planning', '.autonomous-status.json');
 const DECISION_LOG = path.join('.planning', 'DECISIONS-DEFERRED.md');
 const PREFERENCES_FILE = path.join('.planning', 'AUTONOMY-PREFERENCES.md');
@@ -115,6 +120,10 @@ function resolveMode(cwd, override) {
     if (VALID_MODES.includes(normalized)) return normalized;
   }
   return 'supervised';
+}
+
+function isHeadless() {
+  return process.env[HEADLESS_ENV] === '1';
 }
 
 function readConfigMode(cwd) {
@@ -256,6 +265,7 @@ function cmdAutonomyMode(cwd, override, raw) {
     {
       mode,
       unattended: mode !== 'supervised',
+      headless: isHeadless(),
       gap_retries: gapRetries,
       stop_at_milestone_boundary: stopAtBoundary,
       max_cycles: maxCycles,
@@ -313,6 +323,8 @@ module.exports = {
   PREFERENCES_FILE,
   resolveMode,
   resolveGate,
+  isHeadless,
+  HEADLESS_ENV,
   readStatus,
   writeStatus,
   logDecision,

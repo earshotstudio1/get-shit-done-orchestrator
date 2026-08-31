@@ -161,7 +161,21 @@ cat .planning/AUTONOMY-PREFERENCES.md 2>/dev/null
 
 If the file exists and lists every phase in the current run, display `Using existing up-front review: .planning/AUTONOMY-PREFERENCES.md` and proceed to execute_phase.
 
-**Otherwise, build the review.** For each incomplete phase, in order:
+**If the file is missing, check whether anyone is here to review:**
+
+```bash
+AUTONOMY=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy mode)
+```
+
+Parse `headless`. **If `headless` is true**, this cycle was spawned by the controller and there is nobody to answer — running the review would stall the run. Skip it: display `No up-front review found — phases will use recommended answers. Run /gsd:marathon to review first.`, log the decision, and proceed to execute_phase, where `discuss.grey_area` resolves to `accept`.
+
+```bash
+node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" autonomy log-decision \
+  --gate discuss.grey_area --action accept \
+  --note "no up-front review available in a headless cycle — recommendations used for all phases"
+```
+
+**Otherwise (a user is present), build the review.** For each incomplete phase, in order:
 
 1. Run the infrastructure detection from smart_discuss Sub-step 3. Infrastructure phases need no review — note them as auto and move on.
 2. For the remaining (user-facing) phases, generate grey areas and recommendations exactly as smart_discuss Sub-step 3 describes, using prior CONTEXT.md decisions and a codebase scout for grounding.
